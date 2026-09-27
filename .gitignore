@@ -155,4 +155,5 @@ raw-api/
 
 # generated at runtime
 .pr-message.md
+.pr-input/
 scan-report.json

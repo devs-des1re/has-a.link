@@ -8,13 +8,20 @@ const authorUsername = process.env.PR_AUTHOR || "";
 const authorId = Number(process.env.PR_AUTHOR_ID);
 const labels = JSON.parse(process.env.PR_LABELS || "[]");
 
-const BYPASS_LABELS = ["ci: bypass-template-check", "maintainer"];
+const BYPASS_LABELS = ["ci: bypass-template-check", "maintainer", "dependencies"];
+const BYPASS_AUTHORS = ["dependabot[bot]", "github-actions[bot]"];
 
 const isTrustedUser = trustedUsers.some((u) => u.id === authorId);
+const isBotAuthor = BYPASS_AUTHORS.includes(authorUsername.toLowerCase());
 const hasBypassLabel = labels.some((l) => BYPASS_LABELS.includes(l));
 
 if (isTrustedUser) {
   console.log(`PR author "${authorUsername}" is a trusted user. Skipping template validation.`);
+  process.exit(0);
+}
+
+if (isBotAuthor) {
+  console.log(`PR author "${authorUsername}" is an automated bot. Skipping template validation.`);
   process.exit(0);
 }
 

@@ -68,6 +68,175 @@ jobs:
               });
             }
 
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Fetch changed domain files
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100
+            });
+
+            const domainFiles = files.filter(
+              (file) =>
+                file.filename.startsWith("domains/") &&
+                file.filename.endsWith(".json") &&
+                file.status !== "removed"
+            );
+
+            const inputDir = path.join(process.env.GITHUB_WORKSPACE, ".pr-input");
+            fs.rmSync(inputDir, { recursive: true, force: true });
+            fs.mkdirSync(inputDir, { recursive: true });
+
+            for (const file of domainFiles) {
+              const { data } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: file.filename,
+                ref: context.payload.pull_request.head.sha
+              });
+
+              const name = file.filename.replace("domains/", "").replace(/\//g, "__");
+              fs.writeFileSync(
+                path.join(inputDir, name),
+                Buffer.from(data.content, "base64").toString("utf8"),
+                "utf8"
+              );
+            }
+
+      - name: Validate domain files
+        id: validate
+        continue-on-error: true
+        run: node utils/validate-pr.cjs .pr-input
+
+      - name: Handle invalid domain files
+        if: steps.validate.outcome == 'failure'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const fs = require("fs");
+            const { getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+
+            const marker = getMarker("invalid-domain");
+            const label = "reason: invalid domain file";
+            const messagePath = `${process.env.GITHUB_WORKSPACE}/.pr-message.md`;
+
+            if (!fs.existsSync(messagePath)) {
+              return;
+            }
+
+            const body = fs.readFileSync(messagePath, "utf8");
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label
+              });
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: "d93f0b",
+                  description: "A changed domain file failed validation"
+                });
+              } else {
+                throw error;
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label]
+            });
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find((c) => c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+      - name: Clear invalid domain files state
+        if: steps.validate.outcome == 'success'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const { getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+
+            const marker = getMarker("invalid-domain");
+            const label = "reason: invalid domain file";
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: label
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            for (const comment of comments) {
+              if (comment.body?.includes(marker)) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id
+                });
+              }
+            }
+
+      - name: Fail if domain files are invalid
+        if: steps.validate.outcome == 'failure'
+        run: |
+          echo "::error::One or more changed domain files failed validation."
+          exit 1
+
   duplicate:
     name: Duplicate Check
     runs-on: ubuntu-latest
