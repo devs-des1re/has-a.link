@@ -152,3 +152,6 @@ vite.config.ts.timestamp-*
 creds.json
 raw-api/
 .DS_Store
+
+# generated at runtime
+.pr-message.md

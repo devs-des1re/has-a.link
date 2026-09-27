@@ -1,0 +1,296 @@
+name: PR
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check changed paths
+        id: changes
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          token: ${{ secrets.BOT || github.token }}
+          filters: |
+            ci:
+              - ".github/workflows/*"
+              - "tests/*"
+              - "utils/*"
+              - "package.json"
+              - "package-lock.json"
+              - "dnsconfig.js"
+            domain:
+              - "domains/*"
+              - "domains/**"
+            documentation:
+              - ".github/PULL_REQUEST_TEMPLATE.md"
+              - "README.md"
+
+      - name: Add labels
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          CI_CHANGED: ${{ steps.changes.outputs.ci }}
+          DOCUMENTATION: ${{ steps.changes.outputs.documentation }}
+          DOMAIN_CHANGED: ${{ steps.changes.outputs.domain }}
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const labels = [];
+
+            if (process.env.CI_CHANGED === "true") labels.push("ci");
+            if (process.env.DOCUMENTATION === "true") labels.push("documentation");
+            if (process.env.DOMAIN_CHANGED === "true") labels.push("domain");
+
+            const uniqueLabels = [...new Set(labels)];
+
+            if (uniqueLabels.length) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: uniqueLabels
+              });
+            }
+
+  duplicate:
+    name: Duplicate Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check for duplicate open requests
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const { renderMessage, getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+            const marker = getMarker("duplicate-request");
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100
+            });
+
+            const requested = files
+              .filter((f) => f.filename.startsWith("domains/") && f.filename.endsWith(".json") && f.status !== "removed")
+              .map((f) => f.filename.replace("domains/", "").replace(/\.json$/, ""));
+
+            if (!requested.length) return;
+
+            const openPRs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100
+            });
+
+            const conflicts = new Set();
+
+            for (const pr of openPRs) {
+              if (pr.number === context.issue.number) continue;
+
+              const prFiles = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100
+              });
+
+              for (const f of prFiles) {
+                if (!f.filename.startsWith("domains/") || !f.filename.endsWith(".json")) continue;
+                if (f.status === "removed") continue;
+
+                const name = f.filename.replace("domains/", "").replace(/\.json$/, "");
+                if (requested.includes(name)) {
+                  conflicts.add(`- \`${name}.has-a.link\` is also requested by #${pr.number}`);
+                }
+              }
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find((c) => c.body?.includes(marker));
+
+            if (!conflicts.size) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id
+                });
+              }
+              return;
+            }
+
+            const body = renderMessage("duplicate-request", {
+              conflicts: [...conflicts].sort().join("\n")
+            });
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+  template:
+    name: Template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate PR template
+        id: validate
+        continue-on-error: true
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node utils/check-pr-template.cjs
+
+      - name: Handle incomplete PR
+        if: steps.validate.outcome == 'failure'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const { getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+
+            const marker = getMarker("incomplete-pr-template");
+            const label = "reason: incomplete pr";
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label
+              });
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: "b60205",
+                  description: "Pull request does not follow the required template"
+                });
+              } else {
+                throw error;
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label]
+            });
+
+            const fs = require("fs");
+            const body = fs.existsSync(`${process.env.GITHUB_WORKSPACE}/.pr-message.md`)
+              ? fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/.pr-message.md`, "utf8")
+              : getMarker("incomplete-pr-template");
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find((c) => c.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+      - name: Remove incomplete label and comment
+        if: steps.validate.outcome == 'success'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const { getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+
+            const marker = getMarker("incomplete-pr-template");
+            const label = "reason: incomplete pr";
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: label
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            for (const comment of comments) {
+              if (comment.body?.includes(marker)) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id
+                });
+              }
+            }
+
+      - name: Fail if PR template is incomplete
+        if: steps.validate.outcome == 'failure'
+        run: |
+          echo "::error::PR template is incomplete."
+          exit 1
