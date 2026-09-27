@@ -27,4 +27,6 @@ t("Domains with proxy enabled must have at least one proxy-able record", (t) => 
     const data = getDomainData(file);
     validateProxiedRecords(t, data, file);
   });
+
+  t.pass();
 });
