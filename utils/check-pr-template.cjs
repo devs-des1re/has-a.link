@@ -9,13 +9,13 @@ const { renderMessage } = require("./messages.cjs");
 const TEMPLATE_PATH = path.resolve(__dirname, "..", ".github", "PULL_REQUEST_TEMPLATE.md");
 
 const REQUIRED_CHECKBOXES = [
-  "TOS",
-  "DOMAIN_STRUCTURE",
-  "WEBSITE_REACHABLE",
-  "SOFTWARE_RELATED",
-  "NON_COMMERCIAL",
-  "CONTACT_INFO",
-  "WEBSITE_LINK"
+  { id: "TOS", match: /terms of service/i },
+  { id: "DOMAIN_STRUCTURE", match: /domain structure/i },
+  { id: "WEBSITE_REACHABLE", match: /reachable/i },
+  { id: "SOFTWARE_RELATED", match: /software[-\s]development related/i },
+  { id: "NON_COMMERCIAL", match: /not for commercial/i },
+  { id: "CONTACT_INFO", match: /accurate contact information/i },
+  { id: "WEBSITE_LINK", match: /link and a screenshot/i }
 ];
 
 const BYPASS_LABELS = ["ci: bypass-template-check", "maintainer", "dependencies"];
@@ -24,11 +24,13 @@ const BYPASS_AUTHORS = ["dependabot[bot]", "github-actions[bot]"];
 const SECTIONS = [
   {
     name: "Website Preview",
+    heading: "website preview",
     start: "<!-- WEBSITE_PREVIEW_START -->",
     end: "<!-- WEBSITE_PREVIEW_END -->"
   },
   {
     name: "Website Purpose",
+    heading: "website purpose",
     start: "<!-- WEBSITE_PURPOSE_START -->",
     end: "<!-- WEBSITE_PURPOSE_END -->"
   }
@@ -38,12 +40,6 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function isCheckboxChecked(body, marker) {
-  const regex = new RegExp(`-\\s*\\[[xX]\\]\\s*<!--\\s*${marker}\\s*-->`, "i");
-
-  return regex.test(body);
-}
-
 function normalizeLines(text) {
   return text
     .split(/\r?\n/)
@@ -51,56 +47,100 @@ function normalizeLines(text) {
     .filter((line) => line.length > 0);
 }
 
-function buildPlaceholderLines(template) {
+function stripComments(text) {
+  return text.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+function cleanContent(raw, placeholderLines) {
+  return normalizeLines(stripComments(raw))
+    .filter((line) => !placeholderLines.has(line))
+    .join("\n");
+}
+
+function collectTemplateComments(template) {
   const placeholders = new Set();
 
-  for (const section of SECTIONS) {
-    const start = template.indexOf(section.start);
-    const end = template.indexOf(section.end, start + section.start.length);
+  for (const comment of template.match(/<!--[\s\S]*?-->/g) || []) {
+    const inner = comment.replace(/^<!--/, "").replace(/-->$/, "");
 
-    if (start === -1 || end === -1) continue;
-
-    const raw = template.slice(start + section.start.length, end);
-    const commentBodies = raw.match(/<!--[\s\S]*?-->/g) || [];
-
-    for (const comment of commentBodies) {
-      const inner = comment.replace(/^<!--/, "").replace(/-->$/, "");
-
-      for (const line of normalizeLines(inner)) {
-        placeholders.add(line);
-      }
+    for (const line of normalizeLines(inner)) {
+      placeholders.add(line);
     }
   }
 
   return placeholders;
 }
 
-function extractSection(body, startMarker, endMarker, placeholderLines) {
+function findHeadingLineIndex(lines, heading) {
+  const regex = new RegExp(`^#{1,6}\\s*${escapeRegExp(heading)}\\s*$`, "i");
+
+  for (let i = 0; i < lines.length; i++) {
+    if (regex.test(lines[i].trim())) return i;
+  }
+
+  return -1;
+}
+
+function extractByHeading(body, heading, placeholderLines) {
+  const lines = body.split(/\r?\n/);
+  const index = findHeadingLineIndex(lines, heading);
+
+  if (index === -1) {
+    return { found: false, content: "" };
+  }
+
+  const collected = [];
+
+  for (let i = index + 1; i < lines.length; i++) {
+    if (/^#{1,6}\s+\S/.test(lines[i].trim())) break;
+    collected.push(lines[i]);
+  }
+
+  return { found: true, content: cleanContent(collected.join("\n"), placeholderLines) };
+}
+
+function extractByMarker(body, startMarker, endMarker, placeholderLines) {
   const start = body.indexOf(startMarker);
+  const end = start === -1 ? -1 : body.indexOf(endMarker, start + startMarker.length);
 
-  if (start === -1) {
-    return { status: "missing-start", content: "" };
+  if (start === -1 || end === -1) {
+    return { found: false, content: "" };
   }
 
-  const end = body.indexOf(endMarker, start + startMarker.length);
+  return { found: true, content: cleanContent(body.slice(start + startMarker.length, end), placeholderLines) };
+}
 
-  if (end === -1) {
-    return { status: "missing-end", content: "" };
+function extractSection(body, section, placeholderLines) {
+  const byHeading = extractByHeading(body, section.heading, placeholderLines);
+
+  if (byHeading.found) return byHeading;
+
+  return extractByMarker(body, section.start, section.end, placeholderLines);
+}
+
+function isCheckedLine(line) {
+  return /^\s*-\s*\[[xX]\]\s*/.test(line);
+}
+
+function checkboxStatus(body, checkbox) {
+  const lines = body.split(/\r?\n/);
+  let matched = false;
+
+  for (const line of lines) {
+    if (!/^\s*-\s*\[[ xX]\]\s*/.test(line)) continue;
+    if (!checkbox.match.test(line)) continue;
+
+    matched = true;
+
+    if (isCheckedLine(line)) return "checked";
   }
 
-  const raw = body.slice(start + startMarker.length, end);
-  const withoutComments = raw.replace(/<!--[\s\S]*?-->/g, "");
-
-  const content = normalizeLines(withoutComments)
-    .filter((line) => !placeholderLines.has(line))
-    .join("\n");
-
-  return { status: "ok", content };
+  return matched ? "unchecked" : "missing";
 }
 
 function loadPlaceholderLines() {
   try {
-    return buildPlaceholderLines(fs.readFileSync(TEMPLATE_PATH, "utf8"));
+    return collectTemplateComments(fs.readFileSync(TEMPLATE_PATH, "utf8"));
   } catch {
     return new Set();
   }
@@ -110,14 +150,21 @@ function validateTemplate(body, placeholderLines = loadPlaceholderLines()) {
   const errors = [];
 
   for (const checkbox of REQUIRED_CHECKBOXES) {
-    if (!isCheckboxChecked(body, checkbox)) {
-      errors.push(`The \`${checkbox}\` requirement has not been checked.`);
+    const status = checkboxStatus(body, checkbox);
+
+    if (status === "missing") {
+      errors.push(
+        `The \`${checkbox.id}\` requirement line is missing from the template. ` +
+          "Restore the original pull request template and check the box."
+      );
+    } else if (status === "unchecked") {
+      errors.push(`The \`${checkbox.id}\` requirement has not been checked.`);
     }
   }
 
-  const hasAnyMarker = SECTIONS.some((section) => body.includes(section.start));
+  const hasAnySection = SECTIONS.some((section) => extractSection(body, section, placeholderLines).found);
 
-  if (!hasAnyMarker) {
+  if (!hasAnySection) {
     errors.push(
       "The pull request template appears to have been removed or replaced. " +
         "Restore the original template and fill in the **Website Preview** and **Website Purpose** sections."
@@ -127,17 +174,12 @@ function validateTemplate(body, placeholderLines = loadPlaceholderLines()) {
   }
 
   for (const section of SECTIONS) {
-    const { status, content } = extractSection(body, section.start, section.end, placeholderLines);
+    const { found, content } = extractSection(body, section, placeholderLines);
 
-    if (status === "missing-start") {
+    if (!found) {
       errors.push(
-        `The **${section.name}** section is missing its opening marker \`${section.start}\`. ` +
-          "Restore the template instead of removing its markers."
-      );
-    } else if (status === "missing-end") {
-      errors.push(
-        `The **${section.name}** section is missing its closing marker \`${section.end}\`. ` +
-          "Restore the template instead of removing its markers."
+        `The **${section.name}** section is missing. ` +
+          "Do not delete sections from the template — fill them in instead."
       );
     } else if (!content) {
       errors.push(`The **${section.name}** section has not been filled out.`);
@@ -195,4 +237,11 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { validateTemplate, extractSection, isCheckboxChecked, buildPlaceholderLines };
+module.exports = {
+  validateTemplate,
+  extractSection,
+  extractByHeading,
+  extractByMarker,
+  checkboxStatus,
+  collectTemplateComments
+};

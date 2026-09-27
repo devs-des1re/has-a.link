@@ -4,7 +4,12 @@ import path from "path";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const { validateTemplate, buildPlaceholderLines } = require("../utils/check-pr-template.cjs");
+const {
+  validateTemplate,
+  collectTemplateComments,
+  checkboxStatus,
+  extractSection
+} = require("../utils/check-pr-template.cjs");
 
 const template = fs.readFileSync(path.resolve(".github", "PULL_REQUEST_TEMPLATE.md"), "utf8");
 
@@ -12,85 +17,89 @@ function checkedTemplate() {
   return template.replace(/- \[ \]/g, "- [x]");
 }
 
-function withSection(start, end, inner) {
-  const base = checkedTemplate();
-  return base.replace(new RegExp(`${start}[\\s\\S]*?${end}`), `${start}\n${inner}\n${end}`);
+function fillSection(body, heading, content) {
+  return body.replace(new RegExp(`(##\\s*${heading}\\s*\\n)`), `$1${content}\n`);
 }
 
-const PREVIEW_START = "<!-- WEBSITE_PREVIEW_START -->";
-const PREVIEW_END = "<!-- WEBSITE_PREVIEW_END -->";
-const PURPOSE_START = "<!-- WEBSITE_PURPOSE_START -->";
-const PURPOSE_END = "<!-- WEBSITE_PURPOSE_END -->";
+const goodPreview = "- Link: https://myname.has-a.link\n- Screenshot: https://i.imgur.com/abc.png";
+const goodPurpose = "A personal portfolio showcasing my projects.";
+
+function completeBody() {
+  let body = checkedTemplate();
+  body = fillSection(body, "Website Preview", goodPreview);
+  body = fillSection(body, "Website Purpose", goodPurpose);
+  return body;
+}
 
 t("a fully completed template passes", (t) => {
-  let body = withSection(
-    PREVIEW_START,
-    PREVIEW_END,
-    "- Link: https://myname.has-a.link\n- Screenshot: https://i.imgur.com/abc.png"
-  );
-  body = body.replace(
-    new RegExp(`${PURPOSE_START}[\\s\\S]*?${PURPOSE_END}`),
-    `${PURPOSE_START}\nmy portfolio\n${PURPOSE_END}`
-  );
-
-  t.deepEqual(validateTemplate(body), []);
+  t.deepEqual(validateTemplate(completeBody()), []);
 });
 
-t("unchecked boxes are reported", (t) => {
-  const body = checkedTemplate().replace("- [x] <!-- TOS -->", "- [ ] <!-- TOS -->");
-
-  const errors = validateTemplate(body);
-
-  t.true(errors.some((e) => e.includes("TOS")));
-});
-
-t("template leftover placeholder text does not count as filled", (t) => {
+t("template with placeholder text only fails both sections", (t) => {
   const errors = validateTemplate(checkedTemplate());
 
   t.true(errors.some((e) => e.includes("Website Preview")));
   t.true(errors.some((e) => e.includes("Website Purpose")));
 });
 
-t("missing closing marker is detected, not reported as empty", (t) => {
-  const body = checkedTemplate().replace(PURPOSE_END, "");
+t("deleted closing marker no longer breaks detection (heading fallback)", (t) => {
+  const body = completeBody().replace("<!-- WEBSITE_PURPOSE_END -->", "");
+
+  t.deepEqual(validateTemplate(body), []);
+});
+
+t("user response in Purpose without closing marker is accepted", (t) => {
+  const body = checkedTemplate().replace("<!-- WEBSITE_PURPOSE_END -->", "sdsadsadsa");
 
   const errors = validateTemplate(body);
 
-  t.true(errors.some((e) => e.includes("missing its closing marker")));
-  t.false(errors.some((e) => e.includes("Website Purpose** section has not been filled out")));
+  t.false(errors.some((e) => e.includes("Website Purpose")));
 });
 
-t("missing opening marker is detected", (t) => {
-  const body = checkedTemplate().replace(PREVIEW_START, "");
+t("unchecked box is reported", (t) => {
+  const body = completeBody().replace("- [x] <!-- TOS --> I have read", "- [ ] <!-- TOS --> I have read");
 
-  const errors = validateTemplate(body);
-
-  t.true(errors.some((e) => e.includes("missing its opening marker")));
+  t.true(validateTemplate(body).some((e) => e.includes("TOS")));
 });
 
-t("fully removed template is detected", (t) => {
-  const errors = validateTemplate("Just a normal PR description with no markers.");
+t("missing requirement line is reported", (t) => {
+  const body = completeBody()
+    .split(/\r?\n/)
+    .filter((line) => !/TOS/.test(line))
+    .join("\n");
+
+  t.true(validateTemplate(body).some((e) => e.includes("TOS") && e.includes("missing")));
+});
+
+t("fully removed template is reported", (t) => {
+  const errors = validateTemplate("Just a description with no template.");
 
   t.true(errors.some((e) => e.includes("removed or replaced")));
 });
 
-t("placeholder lines are derived from the template", (t) => {
-  const lines = buildPlaceholderLines(template);
+t("placeholder lines come from the template comments", (t) => {
+  const placeholders = collectTemplateComments(template);
 
-  t.true(lines.has("Add a link to your website and a screenshot here."));
-  t.true(lines.has("Briefly describe what your website is and what it is used for."));
+  t.true(placeholders.has("Briefly describe what your website is and what it is used for."));
 });
 
-t("placeholder text plus a real answer passes", (t) => {
-  let body = withSection(
-    PREVIEW_START,
-    PREVIEW_END,
-    "- Link: https://example.com\n- Screenshot: https://i.imgur.com/x.png"
-  );
-  body = body.replace(
-    new RegExp(`${PURPOSE_START}[\\s\\S]*?${PURPOSE_END}`),
-    `${PURPOSE_START}\nsdsadsadsa\n${PURPOSE_END}`
+t("checkboxStatus distinguishes checked, unchecked, missing", (t) => {
+  const checkbox = { id: "TOS", match: /terms of service/i };
+
+  t.is(checkboxStatus(checkedTemplate(), checkbox), "checked");
+  t.is(checkboxStatus(template, checkbox), "unchecked");
+  t.is(checkboxStatus("nothing here", checkbox), "missing");
+});
+
+t("section extraction prefers the heading when markers are removed", (t) => {
+  const body = checkedTemplate().replace(/<!-- WEBSITE_[A-Z_]+ -->/g, "");
+  body.replace("## Website Purpose", "## Website Purpose");
+
+  const result = extractSection(
+    body,
+    { name: "Website Purpose", heading: "website purpose" },
+    collectTemplateComments(template)
   );
 
-  t.deepEqual(validateTemplate(body), []);
+  t.true(result.found);
 });
