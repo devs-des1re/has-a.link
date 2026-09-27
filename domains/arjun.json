@@ -1,7 +1,7 @@
 {
   "owner": {
-    "username": "example",
-    "email": "example@example.com"
+    "username": "devs-des1re",
+    "email": "test@gmail.com"
   },
   "records": {
     "CNAME": "example.pages.dev"
