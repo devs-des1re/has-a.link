@@ -6,5 +6,5 @@
   "records": {
     "CNAME": "example.pages.dev"
   },
-  "proxied": true
+  "proxied": false
 }
