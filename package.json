@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Grab your handsome looking has-a.link subdomain.",
   "type": "module",
+  "engines": {
+    "node": ">=24.12"
+  },
   "scripts": {
     "test": "npx ava tests/*.test.js",
     "index": "node utils/build-index.js"
