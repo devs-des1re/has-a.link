@@ -1,3 +1,4 @@
+// DNSControl zone definition for has-a.link.
 var domainName = "has-a.link";
 var registrar = NewRegistrar("none");
 var dnsProvider = DnsProvider(NewDnsProvider("cloudflare"));
