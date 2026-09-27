@@ -1,0 +1,120 @@
+name: Scan
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  cnames:
+    name: Dangling CNAMEs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 20.x
+
+      - name: Scan CNAME targets
+        run: node utils/scan-cnames.js --output scan-report.json
+
+      - name: Report findings
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const fs = require("fs");
+            const { renderMessage, getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+
+            const marker = getMarker("dangling-cnames");
+            const report = JSON.parse(fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/scan-report.json`, "utf8"));
+
+            const title = "Dangling CNAME scan";
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "scan",
+              per_page: 100
+            });
+
+            const existing = issues.find((issue) => issue.title === title && !issue.pull_request);
+
+            if (report.flagged.length === 0) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body: `Scan at ${report.scannedAt} found no dangling CNAMEs. Closing.`
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  state: "closed"
+                });
+              }
+              return;
+            }
+
+            const findings = report.findings
+              .map(
+                (f) =>
+                  `- \`${f.domain}\` -> \`${f.target}\`${
+                    f.knownTakeoverTarget ? " _(known takeover-prone suffix)_" : ""
+                  }`
+              )
+              .join("\n");
+
+            const body = renderMessage("dangling-cnames", {
+              findings: `${findings}\n\n_Scanned ${report.total} CNAME records at ${report.scannedAt}._`
+            });
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+            } else {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: "scan"
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: "scan",
+                    color: "fbca04",
+                    description: "Automated security scan findings"
+                  });
+                } else {
+                  throw error;
+                }
+              }
+
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["scan"]
+              });
+            }
