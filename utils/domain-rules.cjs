@@ -406,7 +406,53 @@ function validateRecords(data, subdomain, { disallowedCNAMEs = [] } = {}) {
   return findings;
 }
 
-function validateDomainFile({ subdomain, raw, data, reserved = [], internal = [], disallowedCNAMEs = [] }) {
+function validateOwnership({ subdomain, data, prAuthor, prAuthorId, trusted = [], admins = [] }) {
+  const findings = [];
+
+  if (!data || typeof data !== "object" || !data.owner || typeof data.owner.username !== "string") {
+    return findings;
+  }
+
+  const authorId = String(prAuthorId);
+  const author = String(prAuthor || "").toLowerCase();
+  const owner = data.owner.username;
+  const isTrusted = trusted.map(String).includes(authorId);
+
+  if (owner === "has-a.link") {
+    if (!admins.map(String).includes(authorId)) {
+      findings.push({
+        path: "owner.username",
+        problem: `The subdomain \`${subdomain}.has-a.link\` is owned by the service and can only be changed by an administrator.`,
+        fix: "If you believe this is a mistake, contact the maintainers."
+      });
+    }
+
+    return findings;
+  }
+
+  if (owner.toLowerCase() !== author && !isTrusted) {
+    findings.push({
+      path: "owner.username",
+      problem: `The \`owner.username\` is \`${owner}\`, but this pull request was opened by \`${prAuthor}\`.`,
+      fix: `Set \`owner.username\` to \`${prAuthor}\` (the PR author), or ask the owner to open the pull request.`
+    });
+  }
+
+  return findings;
+}
+
+function validateDomainFile({
+  subdomain,
+  raw,
+  data,
+  reserved = [],
+  internal = [],
+  disallowedCNAMEs = [],
+  prAuthor,
+  prAuthorId,
+  trusted = [],
+  admins = []
+}) {
   const findings = [];
   const add = (path, problem, fix) => findings.push({ path, problem, fix });
 
@@ -431,6 +477,11 @@ function validateDomainFile({ subdomain, raw, data, reserved = [], internal = []
   }
 
   findings.push(...validateOwner(data));
+
+  if (prAuthor !== undefined && prAuthorId !== undefined) {
+    findings.push(...validateOwnership({ subdomain, data, prAuthor, prAuthorId, trusted, admins }));
+  }
+
   findings.push(...validateRecords(data, subdomain, { disallowedCNAMEs }));
 
   return findings;
@@ -450,6 +501,7 @@ module.exports = {
   findDuplicateKeys,
   validateSubdomainName,
   validateOwner,
+  validateOwnership,
   validateRecords,
   validateDomainFile
 };

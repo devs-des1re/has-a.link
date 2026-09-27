@@ -187,3 +187,81 @@ t("TXT longer than 255 characters is rejected", (t) => {
 
   t.true(findings.some((f) => f.problem.includes("255 characters")));
 });
+
+t("ownership is not checked when no PR author is supplied", (t) => {
+  const findings = validate("myname.json", {
+    owner: { username: "someoneelse", email: "me@example.com" },
+    records: { CNAME: "example.pages.dev" }
+  });
+
+  t.false(findings.some((f) => f.problem.includes("owner.username")));
+});
+
+t("PR author mismatch is reported with a fix", (t) => {
+  const findings = rules.validateOwnership({
+    subdomain: "myname",
+    data: { owner: { username: "someoneelse" } },
+    prAuthor: "myname",
+    prAuthorId: "123",
+    trusted: [],
+    admins: []
+  });
+
+  t.is(findings.length, 1);
+  t.true(findings[0].problem.includes("`someoneelse`"));
+  t.true(findings[0].problem.includes("`myname`"));
+  t.true(findings[0].fix.includes("myname"));
+});
+
+t("matching PR author is allowed", (t) => {
+  const findings = rules.validateOwnership({
+    subdomain: "myname",
+    data: { owner: { username: "MyName" } },
+    prAuthor: "myname",
+    prAuthorId: "123",
+    trusted: [],
+    admins: []
+  });
+
+  t.deepEqual(findings, []);
+});
+
+t("trusted users bypass the owner check", (t) => {
+  const findings = rules.validateOwnership({
+    subdomain: "myname",
+    data: { owner: { username: "someoneelse" } },
+    prAuthor: "maintainer",
+    prAuthorId: "42",
+    trusted: ["42"],
+    admins: []
+  });
+
+  t.deepEqual(findings, []);
+});
+
+t("service-owned subdomains require an admin", (t) => {
+  const findings = rules.validateOwnership({
+    subdomain: "myname",
+    data: { owner: { username: "has-a.link" } },
+    prAuthor: "someone",
+    prAuthorId: "1",
+    trusted: ["1"],
+    admins: ["2"]
+  });
+
+  t.is(findings.length, 1);
+  t.true(findings[0].problem.includes("administrator"));
+});
+
+t("admins can change service-owned subdomains", (t) => {
+  const findings = rules.validateOwnership({
+    subdomain: "myname",
+    data: { owner: { username: "has-a.link" } },
+    prAuthor: "admin",
+    prAuthorId: "2",
+    trusted: ["2"],
+    admins: ["2"]
+  });
+
+  t.deepEqual(findings, []);
+});

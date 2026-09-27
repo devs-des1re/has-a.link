@@ -121,6 +121,10 @@ jobs:
       - name: Validate domain files
         id: validate
         continue-on-error: true
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: node utils/validate-pr.cjs .pr-input
 
       - name: Handle invalid domain files

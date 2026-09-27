@@ -1,13 +1,17 @@
 import t from "ava";
 import fs from "fs-extra";
 import path from "path";
+import { createRequire } from "module";
 
 import trustedUsers from "../utils/trusted.json" with { type: "json" };
 
+const require = createRequire(import.meta.url);
+const { validateOwnership } = require("../utils/domain-rules.cjs");
+
 const requiredEnvVars = ["PR_AUTHOR", "PR_AUTHOR_ID", "CHANGED_FILES", "DELETED_FILES"];
 
-const trusted = trustedUsers.map((u) => u.id.toString());
-const admins = trustedUsers.filter((u) => u.admin).map((u) => u.id.toString());
+const trusted = trustedUsers.map((u) => String(u.id));
+const admins = trustedUsers.filter((u) => u.admin).map((u) => String(u.id));
 
 function getDomainData(subdomain) {
   try {
@@ -17,17 +21,14 @@ function getDomainData(subdomain) {
   }
 }
 
-function isAuthorized(t, file, data, prAuthor, prAuthorId) {
+function assertAuthorized(t, file, data, prAuthor, prAuthorId) {
   const subdomain = file.replace(/\.json$/, "");
 
-  if (data.owner.username === "has-a.link") {
-    t.true(admins.includes(prAuthorId), `${file}: ${prAuthor} is not authorized to update ${subdomain}.has-a.link`);
-  } else {
-    t.true(
-      data.owner.username.toLowerCase() === prAuthor || trusted.includes(prAuthorId),
-      `${file}: ${prAuthor} is not authorized to update ${subdomain}.has-a.link`
-    );
-  }
+  const findings = validateOwnership({ subdomain, data, prAuthor, prAuthorId, trusted, admins });
+
+  findings.forEach((finding) => {
+    t.true(false, `${file}: ${finding.problem} Fix: ${finding.fix}`);
+  });
 }
 
 t("Users cannot modify generated or protected files", (t) => {
@@ -81,7 +82,7 @@ t("Users can only update their own subdomains", (t) => {
     .map((file) => path.basename(file.name));
 
   changedJSONFiles.forEach((file) => {
-    isAuthorized(t, file, getDomainData(file.replace(/\.json$/, "")), prAuthor, prAuthorId);
+    assertAuthorized(t, file, getDomainData(file.replace(/\.json$/, "")), prAuthor, prAuthorId);
   });
 
   deletedJSONFiles.forEach((file) => {
@@ -94,7 +95,7 @@ t("Users can only update their own subdomains", (t) => {
         .join("\n")
     );
 
-    isAuthorized(t, file, data, prAuthor, prAuthorId);
+    assertAuthorized(t, file, data, prAuthor, prAuthorId);
   });
 
   t.pass();

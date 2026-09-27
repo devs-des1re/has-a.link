@@ -9,6 +9,15 @@ const { renderMessage } = require("./messages.cjs");
 const reserved = require("./reserved.json");
 const internal = require("./internal.json");
 const disallowedCNAMEs = require("./disallowed-cnames.json");
+const trustedUsers = require("./trusted.json");
+
+const trusted = trustedUsers.map((u) => String(u.id));
+const admins = trustedUsers.filter((u) => u.admin).map((u) => String(u.id));
+
+const prAuthor = process.env.PR_AUTHOR;
+const prAuthorId = process.env.PR_AUTHOR_ID;
+const prLabels = JSON.parse(process.env.PR_LABELS || "[]");
+const bypassOwnerCheck = prLabels.includes("ci: bypass-owner-check");
 
 const inputPath = process.argv[2] || ".pr-input";
 const outputPath = ".pr-message.md";
@@ -71,7 +80,20 @@ function parseDomain(filename, raw) {
     };
   }
 
-  const findings = validateDomainFile({ subdomain, raw, data, reserved, internal, disallowedCNAMEs });
+  const includeOwnership = !bypassOwnerCheck && prAuthor !== undefined && prAuthorId !== undefined;
+
+  const findings = validateDomainFile({
+    subdomain,
+    raw,
+    data,
+    reserved,
+    internal,
+    disallowedCNAMEs,
+    prAuthor: includeOwnership ? prAuthor : undefined,
+    prAuthorId: includeOwnership ? prAuthorId : undefined,
+    trusted,
+    admins
+  });
 
   return { subdomain, filename, findings };
 }
