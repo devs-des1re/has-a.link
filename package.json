@@ -1,0 +1,17 @@
+{
+  "name": "has-a.link",
+  "version": "0.1.0",
+  "description": "Grab your handsome looking has-a.link subdomain.",
+  "type": "module",
+  "scripts": {
+    "test": "npx ava tests/*.test.js",
+    "index": "node utils/build-index.js"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "ava": "^8.0.1",
+    "fs-extra": "^11.4.0",
+    "prettier": "3.9.6"
+  }
+}

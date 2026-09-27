@@ -1,0 +1,5 @@
+node_modules/
+domains.json
+v2.json
+raw-api/
+package-lock.json

@@ -1,0 +1,10 @@
+{
+  "owner": {
+    "username": "example",
+    "email": "example@example.com"
+  },
+  "records": {
+    "CNAME": "example.pages.dev"
+  },
+  "proxied": true
+}

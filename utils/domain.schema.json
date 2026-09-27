@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://has-a.link/schema/domain.schema.json",
+  "title": "has-a.link domain registration",
+  "description": "A single subdomain registration file in the domains/ directory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["owner", "records"],
+  "properties": {
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["username", "email"],
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 39,
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "not": {
+            "pattern": "@users\\.noreply\\.github\\.com$"
+          }
+        }
+      }
+    },
+    "records": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "A": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ipv4"
+          }
+        },
+        "AAAA": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ipv6"
+          }
+        },
+        "CNAME": {
+          "$ref": "#/$defs/hostname"
+        },
+        "TXT": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/txt"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/txt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "proxied": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "A CNAME may only stand alone unless the domain is proxied.",
+      "if": {
+        "required": ["records"],
+        "properties": {
+          "records": {
+            "required": ["CNAME"]
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": ["proxied"],
+            "properties": {
+              "proxied": {
+                "const": true
+              }
+            }
+          },
+          {
+            "properties": {
+              "records": {
+                "maxProperties": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "$comment": "A proxied CNAME cannot be combined with A or AAAA records.",
+      "if": {
+        "required": ["proxied", "records"],
+        "properties": {
+          "proxied": {
+            "const": true
+          },
+          "records": {
+            "required": ["CNAME"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "records": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["A"]
+                },
+                {
+                  "required": ["AAAA"]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hostname": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?=.{1,253}$)(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\\.)+[a-zA-Z]{2,63}$",
+      "not": {
+        "enum": ["has-a.link"]
+      }
+    },
+    "txt": {
+      "type": "string",
+      "maxLength": 255
+    },
+    "ipv4": {
+      "type": "string",
+      "pattern": "^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$"
+    },
+    "ipv6": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,7}:$|^(?:[0-9a-fA-F]{1,4}:){0,6}::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}$"
+    }
+  }
+}
