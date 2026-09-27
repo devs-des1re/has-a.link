@@ -1,0 +1,162 @@
+name: Review Ready
+
+on:
+  workflow_run:
+    workflows: ["CI", "PR"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: review-ready-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  ready:
+    name: Ready
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'pull_request_target'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Evaluate checks and comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.BOT || github.token }}
+          script: |
+            const { evaluateChecks } = require(`${process.env.GITHUB_WORKSPACE}/utils/evaluate-checks.cjs`);
+            const { renderMessage, getMarker } = require(`${process.env.GITHUB_WORKSPACE}/utils/messages.cjs`);
+
+            const { owner, repo } = context.repo;
+
+            const openPRs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100
+            });
+
+            let prNumber = context.payload.workflow_run.pull_requests?.[0]?.number;
+
+            if (!prNumber) {
+              const branch = context.payload.workflow_run.head_branch;
+              const match = openPRs.find((item) => item.head.ref === branch);
+              prNumber = match?.number;
+            }
+
+            if (!prNumber) {
+              core.info("No open pull request found for this workflow run. Skipping.");
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber
+            });
+
+            if (pr.state !== "open") {
+              core.info(`Pull request #${prNumber} is not open. Skipping.`);
+              return;
+            }
+
+            const { data } = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: pr.head.sha,
+              per_page: 100
+            });
+
+            const result = evaluateChecks(data.check_runs);
+            const marker = getMarker("ready-for-review");
+            const label = "ready for review";
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber
+            });
+
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            const removeLabel = async () => {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: prNumber,
+                  name: label
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            };
+
+            if (!result.ready) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id
+                });
+              }
+
+              await removeLabel();
+
+              core.info(
+                `Not ready. pending=[${result.pending.join(", ")}] failed=[${result.failed.join(
+                  ", "
+                )}] missing=[${result.missing.join(", ")}]`
+              );
+              return;
+            }
+
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: label });
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: label,
+                  color: "0e8a16",
+                  description: "All checks passed and the pull request is ready for a maintainer"
+                });
+              } else {
+                throw error;
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: prNumber,
+              labels: [label]
+            });
+
+            const body = renderMessage("ready-for-review", {});
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body
+              });
+            }
+
+            core.info(`Pull request #${prNumber} is ready for review.`);

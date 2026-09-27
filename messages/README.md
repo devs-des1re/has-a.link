@@ -19,10 +19,13 @@ Bot comments are defined here as Markdown so they can be customized without touc
 
 ## Available messages
 
-| Key                      | Used by                       | Placeholders    |
-| ------------------------ | ----------------------------- | --------------- |
-| `duplicate-request`      | `pr.yml` duplicate check      | `{{conflicts}}` |
-| `incomplete-pr-template` | `utils/check-pr-template.cjs` | `{{errors}}`    |
+| Key                      | Used by                       | Placeholders                |
+| ------------------------ | ----------------------------- | --------------------------- |
+| `duplicate-request`      | `pr.yml` duplicate check      | `{{conflicts}}`             |
+| `incomplete-pr-template` | `utils/check-pr-template.cjs` | `{{errors}}`                |
+| `invalid-domain`         | `pr.yml` validate             | `{{count}}`, `{{findings}}` |
+| `dangling-cnames`        | `scan.yml` security scan      | `{{findings}}`              |
+| `ready-for-review`       | `review-ready.yml`            | none                        |
 
 ## Placeholder syntax
 
