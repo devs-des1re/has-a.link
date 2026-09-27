@@ -30,6 +30,32 @@ function isAuthorized(t, file, data, prAuthor, prAuthorId) {
   }
 }
 
+t("Users cannot modify generated or protected files", (t) => {
+  if (!requiredEnvVars.every((v) => process.env[v])) {
+    t.pass();
+    return;
+  }
+
+  const prAuthorId = process.env.PR_AUTHOR_ID;
+  const labels = JSON.parse(process.env.PR_LABELS || "[]");
+
+  if (labels.includes("ci: bypass-owner-check")) {
+    t.pass();
+    return;
+  }
+
+  const changedFiles = JSON.parse(process.env.CHANGED_FILES);
+  const protectedFiles = ["domains.json"];
+
+  changedFiles
+    .filter((file) => protectedFiles.includes(file))
+    .forEach((file) => {
+      t.true(trusted.includes(prAuthorId), `${file}: this file is generated and can only be changed by maintainers`);
+    });
+
+  t.pass();
+});
+
 t("Users can only update their own subdomains", (t) => {
   if (!requiredEnvVars.every((v) => process.env[v])) {
     t.pass();

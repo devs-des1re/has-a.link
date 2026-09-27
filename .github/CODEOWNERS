@@ -1,0 +1,11 @@
+# Default owners for everything in the repo.
+* @has-a-link/maintainers
+
+# Infrastructure that runs with elevated privileges or affects all domains.
+/dnsconfig.js @has-a-link/maintainers
+/utils/ @has-a-link/maintainers
+/tests/ @has-a-link/maintainers
+/.github/ @has-a-link/maintainers
+/package.json @has-a-link/maintainers
+/package-lock.json @has-a-link/maintainers
+/domains.json @has-a-link/maintainers
