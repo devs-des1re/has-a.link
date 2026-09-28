@@ -65,15 +65,6 @@ for (var subdomain in domains) {
   }
 }
 
-var reserved = require("./utils/reserved.json");
-var internal = require("./utils/internal.json");
-
-// Handle reserved domains (excluding names managed internally)
-for (var i = 0; i < reserved.length; i++) {
-  if (internal.indexOf(reserved[i]) !== -1) continue;
-  records.push(A(reserved[i], IP("192.0.2.1"), CF_PROXY_ON));
-}
-
 // Zone last updated TXT record
 records.push(TXT("_zone-updated", '"' + Date.now().toString() + '"'));
 
@@ -88,7 +79,20 @@ var ignored = [
   IGNORE("cf-bounce", "MX,TXT")
 ];
 
-internal.forEach(function (subdomain) {
+var reserved = require("./utils/reserved.json");
+var internal = require("./utils/internal.json");
+
+// Reserved and internal names are managed outside DNSControl. They are never
+// registered by users, so DNSControl must not create, modify, or delete their
+// records. Ignoring them leaves any existing records untouched and protects
+// future manual edits.
+var managedExternally = reserved.concat(
+  internal.filter(function (name) {
+    return reserved.indexOf(name) === -1;
+  })
+);
+
+managedExternally.forEach(function (subdomain) {
   ignored.push(IGNORE(subdomain, "*"));
 });
 
